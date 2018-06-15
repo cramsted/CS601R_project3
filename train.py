@@ -12,7 +12,7 @@ from FaceNet import FaceNet
 from sklearn.neighbors import KDTree
 
 TRAIN_DATA = "../lfw/pairs_dev_train.json"
-TEST_DATA = "../lfw/images/pairs_dev_test.json"
+TEST_DATA = "../lfw/pairs_dev_test.json"
 
 MODEL_FILENAME = 'single_Linear_embedded_layer.json'
 LOSS_FILENAME = 'single_Linear_embedded_layer.pkl'
@@ -30,13 +30,11 @@ except:
 try:
     with open(LOSS_FILENAME, 'rb') as f:
         accuracies = pickle.load(f)
-        train_accuracy = accuracies[0]
-        test_accuracy = accuracies[1]
-        num_epochs = accuracies[2]
+        avg_loss = accuracies[0]
+        avg_acc = accuracies[1]
 except:
-    train_accuracy = []
-    test_accuracy = []
-    num_epochs = 0
+    avg_loss = []
+    avg_acc = []
 
 # Datasets
 raw_dataset = RawData(TRAIN_DATA)
@@ -44,8 +42,21 @@ raw_loader = DataLoader(raw_dataset, batch_size=50,
                         shuffle=False, num_workers=10)
 
 triplet_dataset = TripletData()
-triplet_loader = DataLoader(triplet_dataset, batch_size=50,
-                            shuffle=False, num_workers=10)
+triplet_loader = DataLoader(triplet_dataset, batch_size=30,
+                            shuffle=False, num_workers=15)
+
+test_dataset = TestData(TEST_DATA)
+train_dataset = TestData(TRAIN_DATA)
+test_loader = DataLoader(test_dataset, batch_size=50,
+                         shuffle=True, num_workers=15)
+train_loader = DataLoader(train_dataset, batch_size=50,
+                          shuffle=True, num_workers=15)
+
+# loss functions
+criterion = nn.TripletMarginLoss(margin=0.2)
+optimizer = optim.Adam(
+    [{"params": face.parameters(), 'initial_lr': 5e-4}], lr=1e-3)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 25, gamma=0.1)
 
 
 def create_tree():
@@ -62,6 +73,40 @@ def create_tree():
     return KDTree(output), output, output_labels
 
 
+def train():
+    losses = []
+    for i, data in enumerate(triplet_loader, 1):
+        anchor, pos, neg = data
+        anchor, pos, neg = anchor.to(device), pos.to(device), neg.to(device)
+
+        optimizer.zero_grad()
+
+        out_anchor = face(anchor)
+        out_pos = face(pos)
+        out_neg = face(neg)
+
+        loss = criterion(out_anchor, out_pos, out_neg)
+        loss.backward()
+        optimizer.step()
+        losses.append(loss.item())
+    return np.average(losses)
+
+
+def test():
+    with torch.no_grad():
+        for i, data in enumerate(test_loader):
+            img1, img2, label = data[0].to(device), data[1].to(device), data[2]
+            label = label.type(torch.ByteTensor).cuda()
+
+            out_img1 = face(img1)
+            out_img2 = face(img2)
+
+            dist = (((out_img1 - out_img2)**2).sum(1)**(1/2)) <= 1.0
+
+            acc = dist == label if i == 0 else torch.cat((acc, dist == label))
+    acc = acc.cpu().detach().numpy()
+    return acc.sum()/acc.shape[0]
+
 
 # get number of epochs to run
 try:
@@ -73,12 +118,17 @@ for epoch in range(1, epochs+1):
     start = time.time()
     tree, embeddings, labels = create_tree()
     triplet_dataset.set_tree(tree, embeddings, labels)
-    triplet_dataset.__getitem__(0)
-    for data in triplet_loader:
-        anchor, pos, neg = data
-        anchor, pos, neg = anchor.to(device), pos.to(device), neg.to(device)
-        import pdb
-        pdb.set_trace()
 
-    print('[Epoch:', epoch, '] [Time:',
-          (time.time()-start)/60, " minutes]")
+    scheduler.step()
+    loss = train()
+    acc = test()
+
+    avg_loss.append(loss)
+    avg_acc.append(acc)
+
+    torch.save(face.state_dict(), MODEL_FILENAME)
+    with open(LOSS_FILENAME, 'wb') as f:
+        pickle.dump((avg_loss, avg_acc), f)
+
+    print('[Epoch:', len(avg_acc), '] [Time:',
+          (time.time()-start)/60, " minutes] [Accuracy:", acc, "%] [Average Loss:", loss, "]")

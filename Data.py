@@ -73,13 +73,21 @@ class TripletData(Dataset):
     def get_random_triplet(self, index):
         anchor_name, pos_name = random.sample(
             self._train_data[self._triplet_pairs[index]], 2)
-        i = self.labels.index(anchor_name)
-        key = anchor_name.split("/")[0]
-        dist, ind = self.tree.query([self.embeddings[i]], k=550)
-        for j in ind[0]:
-            if key != self.labels[j].split("/")[0]:
-                neg_name = self.labels[j]
-                break
+        # 30% chance to get a hard negative
+        if np.random.rand() > .3:
+            anchor_class = neg_class = ""
+            while anchor_class == neg_class:
+                neg_name = random.choice(self._images)
+                anchor_class = anchor_name.split("/")[0]
+                neg_class = neg_name.split("/")[0]
+        else:
+            i = self.labels.index(anchor_name)
+            key = anchor_name.split("/")[0]
+            dist, ind = self.tree.query([self.embeddings[i]], k=550)
+            for j in ind[0]:
+                if key != self.labels[j].split("/")[0]:
+                    neg_name = self.labels[j]
+                    break
         return anchor_name, pos_name, neg_name
 
     def set_tree(self, tree, embeddings, labels):
@@ -93,7 +101,7 @@ class TripletData(Dataset):
 
 class TestData(Dataset):
     def __init__(self, img_json, transform=None):
-        json_data = open(IMAGE_ROOT_DIR+"../"+img_json).read()
+        json_data = open(img_json).read()
         data = json.loads(json_data)
 
         for i in data["diff"]:
@@ -108,3 +116,6 @@ class TestData(Dataset):
         img2 = get_image(self._data[index][1])
         label = self._data[index][2]
         return img1, img2, label
+
+    def __len__(self):
+        return len(self._data)

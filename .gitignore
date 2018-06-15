@@ -2,3 +2,5 @@ __pycache__/
 .ipynb_checkpoints/
 *.pkl
 *.json
+ubuntu@18.191.148.87
+*.sh
